@@ -1,89 +1,119 @@
 # System-0 Engine
 
-High-performance 3D game engine optimized for 8GB RAM / 2GB VRAM systems. Purpose-built for corridor-based, story-driven FPS games (HL2/F.E.A.R. style).
+High-performance Forward+ 3D game engine optimized for **8GB RAM / 2GB VRAM** systems. Purpose-built for corridor-based, story-driven FPS games (HL2/F.E.A.R. style).
 
-## Architecture Decisions
+## Technical Specifications
 
-### 1. Spatial Partitioning: **Uniform 3D Grid**
-- **Decision**: Uniform grid for Forward+ light culling + separate BVH for physics
-- **Rationale**: Corridor environments have consistent vertical spacing; uniform grid provides O(1) cell lookup and fast frustum-light intersection tests
-- **Grid Dimensions**: 16x8x16 cells optimized for typical indoor ceiling heights
+### Core Architecture
+- **Language**: C++20 (No embedded scripting - pure native code)
+- **Renderer**: Forward+ (Clustered) with 100% dynamic lighting
+- **NO baked lightmaps** - all lighting is real-time
+- **APIs**: OpenGL 4.6 (Windows/Linux), Metal (macOS)
 
-### 2. Shadow Technique: **Single Atlas with Distance LODs**
-- **Decision**: Single 4K shadow atlas with aggressive distance-based quality levels
-- **Quality Tiers**:
-  - <10m: 1024x1024 per light
-  - <20m: 512x512 per light  
-  - <50m: 256x256 per light
-  - >50m: No shadows (bandwidth savings)
-- **Max Shadowed Lights**: 64 concurrent
-- **VRAM Budget**: ~64MB for shadow atlas (fits comfortably in 2GB VRAM)
+### Key Features
+- **Uniform 3D Grid** (16×8×16) for light culling - O(1) cell lookup
+- **Shadow Atlas**: Single 4K texture with distance-based LODs
+  - <10m: 1024² resolution
+  - <20m: 512² resolution  
+  - <50m: 256² resolution
+  - >50m: No shadows (VRAM savings)
+- **Double-buffered Physics/Render** threading for stability
+- **Arena Allocators** for zero per-frame allocations
+- **Object Pools** for entities/projectiles
 
-### 3. Threading Model: **Double-Buffered Physics/Render**
-- **Decision**: Double-buffered state with 1-frame latency
-- **Rationale**: Story-driven FPS prioritizes stability over competitive latency; eliminates risk of pipeline stalls and race conditions
-- **Sync Point**: End of frame, before vsync
+### Memory Budgets
+| Resource | Budget |
+|----------|--------|
+| Shadow Atlas | ~64MB VRAM |
+| Max Shadow Casters | 64 lights |
+| Light Grid Cells | 2,048 cells |
+| Max Dynamic Lights | 1,024 |
 
 ## Project Structure
 
-See file tree below.
+```
+system0-engine/
+├── CMakeLists.txt          # Build configuration
+├── src/
+│   ├── core/               # Memory, logging, types
+│   ├── rhi/                # Render Hardware Interface
+│   │   ├── gl/             # OpenGL backend
+│   │   └── metal/          # Metal backend
+│   ├── renderer/           # Forward+ pipeline
+│   ├── engine/             # Application, World
+│   ├── loader/             # S0_DATA format
+│   ├── physics/            # Bullet wrapper
+│   └── audio/              # Miniaudio wrapper
+├── cooker/                 # Asset cooking CLI
+└── game/                   # Game executable
+```
 
 ## Binary Format: S0_DATA
 
-Memory-mapped format for instant level loading:
+Custom binary format for instant level loading:
 
-| Section | Content | Alignment |
-|---------|---------|-----------|
-| Header (64B) | Magic, version, offsets | 8-byte |
-| Vertices | 32-byte packed (position, oct-normal, UV, tangent) | 16-byte |
-| Indices | u16/u32 triangle list | 4-byte |
-| Lights | 48-byte PackedLight structs | 16-byte |
-| Collision | Convex hull vertices for Bullet | 4-byte |
-| Entities | Key-value string pairs | 1-byte |
+```cpp
+struct S0Header {          // 64 bytes
+    u32 magic;             // "S0DB"
+    u32 version;
+    u64 total_file_size;
+    u64 vertex_data_offset;
+    u64 index_data_offset;
+    u64 light_data_offset;
+    u64 collision_offset;
+    u64 entity_count;
+    u64 entity_data_offset;
+};
+
+struct PackedVertex {      // 32 bytes
+    f32 position[3];       // World space
+    u8 normal[4];          // Octahedral encoded
+    f32 texcoord[2];       // UV coordinates
+    f32 tangent[4];        // Tangent + bitangent sign
+};
+
+struct PackedLight {       // 48 bytes
+    f32 position[3];
+    f32 radius;
+    f32 color[3];
+    f32 intensity;
+    LightType type;
+    u32 casts_shadow;
+    f32 spot_angles[2];
+};
+```
 
 ## Building
 
 ### Prerequisites
 - CMake 3.20+
 - C++20 compiler (GCC 11+, Clang 14+, MSVC 2022+)
-- SDL2, Bullet Physics, miniaudio
+- SDL2
+- Bullet Physics
+- OpenGL 4.6 or Metal
 
-### Linux/Windows (OpenGL)
+### Build Commands
 ```bash
 mkdir build && cd build
 cmake .. -DCMAKE_BUILD_TYPE=Release
 cmake --build .
 ```
 
-### macOS (Metal)
-```bash
-mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build .
-```
+### Targets
+- `s0_cooker` - Asset cooking CLI tool
+- `s0_game` - Game executable
 
 ## Usage
 
-### Asset Cooker
+### Cooking a Level
 ```bash
-./s0_cooker level.map assets_cooked/level.s0data
+./s0_cooker input.map output.s0data
 ```
 
 ### Running the Game
 ```bash
 ./s0_game
 ```
-
-## Performance Targets
-
-| Metric | Target |
-|--------|--------|
-| Frame Time | <=16.67ms (60 FPS) |
-| Draw Calls | <=500 per frame |
-| VRAM Usage | <=1.5GB (headroom for drivers) |
-| RAM Usage | <=4GB total |
-| Light Count | 256 active dynamic lights |
-| Shadow Casters | 64 concurrent |
 
 ## License
 
